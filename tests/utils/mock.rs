@@ -37,10 +37,22 @@ pub enum CredentialFormat {
     W3C,
 }
 
+#[derive(Debug)]
+pub enum Credentials {
+    Legacy(Credential),
+    W3C(W3CCredential),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresentationFormat {
     Legacy,
     W3C,
+}
+
+#[derive(Debug)]
+pub enum Presentations {
+    Legacy(Presentation),
+    W3C(W3CPresentation),
 }
 
 pub type IssuerValues<'a> =
@@ -684,9 +696,4 @@ impl<'a> Mock<'a> {
             }
         }
     }
-}
-
-pub enum Presentations {
-    Legacy(Presentation),
-    W3C(W3CPresentation),
 }
