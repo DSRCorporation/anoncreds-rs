@@ -121,7 +121,7 @@ impl<'a> Mock<'a> {
         (schemas, cred_defs, rev_status_lists, rev_reg_def_map)
     }
 
-    pub fn verifer_verifies_presentations_for_requests(
+    pub fn verifier_verifies_presentations_for_requests(
         &self,
         presentations: &[Presentations],
         reqs: &[PresentationRequest],

@@ -1,5 +1,7 @@
+use serde_json::json;
 use std::collections::HashMap;
 
+use anoncreds::data_types::pres_request::{NonRevokedInterval, PresentationRequestPayload};
 use anoncreds::w3c::types::MakeCredentialAttributes;
 use anoncreds::{
     data_types::{
@@ -13,6 +15,7 @@ use anoncreds::{
         MakeCredentialValues, PresentCredentials, Presentation, PresentationRequest,
         RevocationRegistryDefinition, RevocationRegistryDefinitionPrivate, RevocationStatusList,
     },
+    verifier,
 };
 
 use super::storage::ProverWallet;
@@ -27,6 +30,8 @@ pub const GVT_CRED_DEF_ID: &str = "creddef:government";
 pub const GVT_CRED_DEF_TAG: &str = "govermenttag";
 
 pub const GVT_ISSUER_ID: &str = "issuer:id/path=bar";
+pub const GVT_PROVER_ID: &str = "prover:id/path=bar";
+pub const TF_PATH: &str = "../.tmp";
 
 pub const GVT_REV_REG_DEF_ID: &str = "revreg:government/id";
 pub const GVT_REV_REG_TAG: &str = "revreggovermenttag";
@@ -48,6 +53,14 @@ pub const EMP_REV_REG_DEF_ID: &str = "revreg:employee/id";
 pub const EMP_REV_REG_TAG: &str = "revregemployeetag";
 pub const EMP_REV_IDX: u32 = 9;
 pub const EMP_REV_MAX_CRED_NUM: u32 = 10;
+
+pub struct ReqInput<'a> {
+    pub req_name: &'a str,
+    pub issuer: &'a str,
+    pub global_nonrevoke: Option<NonRevokedInterval>,
+    pub attr_nonrevoke: Vec<(&'a str, NonRevokedInterval)>,
+    pub pred_nonrevoke: Vec<(&'a str, NonRevokedInterval)>,
+}
 
 // Create a `GVT` or `EMP` schema
 pub fn create_schema(name: &str) -> (Schema, &str) {
@@ -281,4 +294,50 @@ pub fn raw_credential_values(name: &str) -> MakeCredentialAttributes {
         }
         unsupported => panic!("Unsupported credential values. {unsupported}"),
     }
+}
+
+pub fn create_request(input: &ReqInput, include_self_attested: bool) -> PresentationRequest {
+    let nonce = verifier::generate_nonce().unwrap();
+    let mut request_json = json!({
+        "nonce": nonce,
+        "name":input.req_name ,
+        "version":"0.1",
+        "requested_attributes":{
+            "attr1_referent":{
+                "name":"name",
+                "issuer_id": input.issuer,
+            },
+            "attr2_referent":{
+                "name":"sex"
+            },
+            "attr4_referent":{
+                "names": ["height"],
+            },
+            "attr5_referent": {"names": ["wand", "house", "year"]},
+
+        },
+        "requested_predicates":{
+            "predicate1_referent":{"name":"age","p_type":">=","p_value":18}
+        },
+    });
+    if include_self_attested {
+        request_json["requested_attributes"]["attr3_referent"] = json!({"name": "phone"});
+    }
+
+    let mut presentation: PresentationRequestPayload =
+        serde_json::from_value(request_json).unwrap();
+    presentation.non_revoked = input.global_nonrevoke.clone();
+
+    for ni in input.attr_nonrevoke.iter() {
+        let at = presentation.requested_attributes.get_mut(ni.0).unwrap();
+        at.non_revoked = Some(ni.1.clone());
+    }
+
+    for ni in input.pred_nonrevoke.iter() {
+        let at = presentation.requested_predicates.get_mut(ni.0).unwrap();
+        at.non_revoked = Some(ni.1.clone());
+    }
+
+    log::info!("\n Request: {:?}", presentation);
+    PresentationRequest::PresentationRequestV1(presentation)
 }

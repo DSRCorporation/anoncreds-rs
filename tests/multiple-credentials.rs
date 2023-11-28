@@ -330,7 +330,7 @@ fn _anoncreds_with_multiple_credentials_per_request(
     // Without override fails
     let overrides = vec![None; 5];
     let results =
-        mock.verifer_verifies_presentations_for_requests(&presentations, &reqs, &overrides);
+        mock.verifier_verifies_presentations_for_requests(&presentations, &reqs, &overrides);
     assert!(results[0].is_ok());
     assert!(results[4].is_ok());
     assert!(results[1].is_err());
@@ -348,7 +348,7 @@ fn _anoncreds_with_multiple_credentials_per_request(
         None,
     ];
     let results =
-        mock.verifer_verifies_presentations_for_requests(&presentations, &reqs, &overrides);
+        mock.verifier_verifies_presentations_for_requests(&presentations, &reqs, &overrides);
     assert!(results[1].is_ok());
     assert!(results[2].is_ok());
     assert!(results[3].is_ok());

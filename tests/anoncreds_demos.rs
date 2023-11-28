@@ -1,5 +1,5 @@
 use anoncreds::data_types::cred_def::CredentialDefinitionId;
-use anoncreds::data_types::pres_request::PredicateTypes;
+use anoncreds::data_types::pres_request::{NonRevokedInterval, PredicateTypes};
 use anoncreds::data_types::rev_reg_def::RevocationRegistryDefinitionId;
 use anoncreds::data_types::schema::SchemaId;
 use anoncreds::data_types::w3c::credential::CredentialAttributeValue;
@@ -7,8 +7,7 @@ use anoncreds::data_types::w3c::credential_proof::CredentialProof;
 use anoncreds::data_types::w3c::presentation_proof::{PredicateAttribute, PredicateAttributeType};
 use anoncreds::data_types::w3c::uri::URI;
 use anoncreds::prover;
-use anoncreds::tails::TailsFileWriter;
-use anoncreds::types::{CredentialRevocationConfig, PresentCredentials};
+use anoncreds::types::PresentCredentials;
 use anoncreds::verifier;
 use anoncreds::w3c::credential_conversion::{credential_from_w3c, credential_to_w3c};
 use anoncreds::w3c::types::MakeCredentialAttributes;
@@ -194,175 +193,133 @@ fn anoncreds_demo_works_for_single_issuer_single_prover() {
 }
 
 #[test]
-fn anoncreds_demo_works_with_revocation_for_single_issuer_single_prover() {
-    // Create Prover pseudo wallet and link secret
-    let mut prover_wallet = ProverWallet::default();
+fn anoncreds_demo_works_with_revocation_for_single_issuer_single_prover_legacy() {
+    _anoncreds_demo_works_with_revocation_for_single_issuer_single_prover(
+        CredentialFormat::Legacy,
+        PresentationFormat::Legacy,
+    );
+}
+
+fn _anoncreds_demo_works_with_revocation_for_single_issuer_single_prover(
+    credential_format: CredentialFormat,
+    presentation_format: PresentationFormat,
+) {
+    // Create Issuer and Prover pseudo wallets and link secret
+    let mut mock = utils::Mock::new(&[GVT_ISSUER_ID], &[GVT_PROVER_ID], TF_PATH, 1);
 
     // Create schema
-    let (gvt_schema, gvt_schema_id) = fixtures::create_schema("GVT");
-
-    // Create credential definition
-    let ((gvt_cred_def, gvt_cred_def_priv, gvt_cred_key_correctness_proof), gvt_cred_def_id) =
-        fixtures::create_cred_def(&gvt_schema, true);
-
-    // Create tails file writer
-    let mut tf = TailsFileWriter::new(None);
-
-    let ((gvt_rev_reg_def, gvt_rev_reg_def_priv), gvt_rev_reg_def_id) =
-        fixtures::create_rev_reg_def(&gvt_cred_def, &mut tf);
-
-    // Issuer creates revocation status list - to be put on the ledger
-    let time_create_rev_status_list = 12;
-    let gvt_revocation_status_list = fixtures::create_revocation_status_list(
-        &gvt_cred_def,
-        &gvt_rev_reg_def,
-        &gvt_rev_reg_def_priv,
-        Some(time_create_rev_status_list),
-        true,
-    );
-
-    // Issuer creates a Credential Offer
-    let cred_offer = issuer::create_credential_offer(
-        gvt_schema_id.try_into().unwrap(),
-        gvt_cred_def_id.try_into().unwrap(),
-        &gvt_cred_key_correctness_proof,
-    )
-    .expect("Error creating credential offer");
-
-    // Prover creates a Credential Request
-    let (cred_request, cred_request_metadata) = prover::create_credential_request(
-        Some("entropy"),
-        None,
-        &gvt_cred_def,
-        &prover_wallet.link_secret,
-        "default",
-        &cred_offer,
-    )
-    .expect("Error creating credential request");
-
-    // Issuer creates a credential
-    let cred_values = fixtures::credential_values("GVT");
-
-    let gvt_rev_reg_def_id = RevocationRegistryDefinitionId::new_unchecked(gvt_rev_reg_def_id);
-
-    // Get the location of the tails_file so it can be read
-    let tails_location = gvt_rev_reg_def.value.tails_location.clone();
-
-    let issue_cred = issuer::create_credential(
-        &gvt_cred_def,
-        &gvt_cred_def_priv,
-        &cred_offer,
-        &cred_request,
-        cred_values.into(),
-        Some(CredentialRevocationConfig {
-            reg_def: &gvt_rev_reg_def,
-            reg_def_private: &gvt_rev_reg_def_priv,
-            registry_idx: fixtures::GVT_REV_IDX,
-            status_list: &gvt_revocation_status_list,
-        }),
-    )
-    .expect("Error creating credential");
-
-    let time_after_creating_cred = time_create_rev_status_list + 1;
-    let issued_rev_status_list = issuer::update_revocation_status_list(
-        &gvt_cred_def,
-        &gvt_rev_reg_def,
-        &gvt_rev_reg_def_priv,
-        &gvt_revocation_status_list,
-        Some(BTreeSet::from([fixtures::GVT_REV_IDX])),
-        None,
-        Some(time_after_creating_cred),
-    )
-    .unwrap();
-
-    // Prover receives the credential and processes it
-    let mut recv_cred = issue_cred;
-    prover::process_credential(
-        &mut recv_cred,
-        &cred_request_metadata,
-        &prover_wallet.link_secret,
-        &gvt_cred_def,
-        Some(&gvt_rev_reg_def),
-    )
-    .expect("Error processing credential");
-    prover_wallet.credentials.push(recv_cred);
-
-    // Verifier creates a presentation request
-    let nonce = verifier::generate_nonce().expect("Error generating presentation request nonce");
-
-    // There are fields for
-    // - global non_revoked - i.e. the PresentationRequest level
-    // - local non_revoked - i.e. Each Request Attributes (AttributeInfo) and Request Predicate (PredicateInfo) has a field for NonRevoked.
-    let pres_request = serde_json::from_value(json!({
-        "nonce": nonce,
-        "name":"pres_req_1",
-        "version":"0.1",
-        "requested_attributes":{
-            "attr1_referent":{
-                "name":"name",
-                "issuer_id": GVT_ISSUER_ID
-            },
-            "attr2_referent":{
-                "name":"sex"
-            },
-            "attr3_referent":{"name":"phone"},
-            "attr4_referent":{
-                "names": ["name", "height"]
-            }
-        },
-        "requested_predicates":{
-            "predicate1_referent":{"name":"age","p_type":">=","p_value":18}
-        },
-        "non_revoked": {"from": 10, "to": 200}
-    }))
-    .expect("Error creating proof request");
-
-    let rev_state = prover::create_or_update_revocation_state(
-        &tails_location,
-        &gvt_rev_reg_def,
-        &gvt_revocation_status_list,
-        fixtures::GVT_REV_IDX,
-        None,
-        None,
-    )
-    .unwrap();
-
+    let (gvt_schema, gvt_schema_id) = create_schema("GVT");
     let mut schemas = HashMap::new();
     let gvt_schema_id = SchemaId::new_unchecked(gvt_schema_id);
     schemas.insert(gvt_schema_id, gvt_schema.clone());
+    mock.ledger.schemas = schemas;
 
-    let mut cred_defs = HashMap::new();
-    let gvt_cred_def_id = CredentialDefinitionId::new_unchecked(gvt_cred_def_id);
-    cred_defs.insert(gvt_cred_def_id, gvt_cred_def.try_clone().unwrap());
 
-    let mut rev_status_list = vec![issued_rev_status_list.clone()];
+    let issuer1_creds: IssuerValues = HashMap::from([(
+        GVT_CRED_DEF_ID,
+        (
+            GVT_SCHEMA_ID,
+            HashMap::from([
+                ("sex", "male"),
+                ("name", "Alex"),
+                ("height", "175"),
+                ("age", "28"),
+            ]),
+            true,
+            GVT_REV_REG_DEF_ID,
+            GVT_REV_IDX,
+        ),
+    )]);
 
-    // Prover creates presentation
-    let presentation = fixtures::create_presentation(
-        &schemas,
-        &cred_defs,
-        &pres_request,
-        &prover_wallet,
-        Some(time_after_creating_cred),
-        Some(&rev_state),
+    let time_create_rev_status_list = 8u64;
+
+    // 1: Issuer setup (create cred defs, rev defs(optional), cred_offers)
+    mock.issuer_setup(
+        GVT_ISSUER_ID,
+        GVT_PROVER_ID,
+        &issuer1_creds,
+        time_create_rev_status_list,
+        true,
+    );
+
+    let time_after_creating_cred = time_create_rev_status_list + 1;
+    // 2: prover requests and gets credential stored in their wallets
+    mock.issuer_create_credential_and_store_in_prover_wallet(
+        GVT_ISSUER_ID,
+        GVT_PROVER_ID,
+        &issuer1_creds,
+        time_create_rev_status_list,
+        time_after_creating_cred,
+        credential_format,
+    );
+
+    // 3. Prover creates revocation states for all credentials with ledger values
+    // rev_states are stored in the prover wallet
+    mock.prover_creates_revocation_states(GVT_PROVER_ID, time_after_creating_cred);
+
+    // 4. Prover create presentations
+    let prover_values: ProverValues = HashMap::from([(
+        GVT_CRED_DEF_ID,
+        (
+            vec!["attr1_referent", "attr2_referent", "attr4_referent"],
+            vec!["predicate1_referent"],
+        ),
+    )]);
+
+    let self_attested = match presentation_format {
+        PresentationFormat::Legacy => {
+            HashMap::from([("attr3_referent".to_string(), "8-800-300".to_string())])
+        }
+        PresentationFormat::W3C => HashMap::new(),
+    };
+
+    let r0 = ReqInput {
+        req_name: "global_rev",
+        issuer: GVT_ISSUER_ID,
+        global_nonrevoke: Some(NonRevokedInterval::new(Some(10), Some(200))),
+        attr_nonrevoke: vec![],
+        pred_nonrevoke: vec![],
+    };
+
+    let req = create_request(&r0, true);
+    let presentation = mock.prover_creates_presentation(
+        GVT_PROVER_ID,
+        prover_values.clone(),
+        self_attested.clone(),
+        &req,
+        presentation_format.clone(),
     );
 
     // Verifier verifies presentation of not Revoked rev_state
-    let rev_reg_def_map = HashMap::from([(gvt_rev_reg_def_id, gvt_rev_reg_def.clone())]);
-    let valid = verifier::verify_presentation(
-        &presentation,
-        &pres_request,
-        &schemas,
-        &cred_defs,
-        Some(&rev_reg_def_map),
-        Some(rev_status_list.clone()),
-        None,
-    )
-    .expect("Error verifying presentation");
-    assert!(valid);
+
+    let overrides = vec![None; 5];
+    let reqs = [req];
+    let results =
+        mock.verifier_verifies_presentations_for_requests(&[presentation], &reqs, &overrides);
+    assert!(results[0].is_ok());
 
     //  ===================== Issuer revokes credential ================
+
+    let iss_wallet = mock.issuer_wallets.get(GVT_ISSUER_ID).unwrap();
+    let rev_def: &StoredRevDef = iss_wallet.rev_defs.get(GVT_REV_REG_DEF_ID).unwrap();
+    let gvt_rev_reg_def_priv = &rev_def.private;
+    let gvt_rev_reg_def = &rev_def.public;
+    let gvt_cred_def = mock
+        .ledger
+        .cred_defs
+        .get(&CredentialDefinitionId::new_unchecked(GVT_CRED_DEF_ID))
+        .unwrap();
+    let issued_rev_status_list = &mock
+        .ledger
+        .revocation_list
+        .get(GVT_REV_REG_DEF_ID)
+        .unwrap()
+        .get(&time_after_creating_cred)
+        .unwrap();
+
+    let rev_reg_def_map = HashMap::from([(GVT_CRED_DEF_ID, gvt_rev_reg_def.clone())]);
     let time_revoke_cred = time_after_creating_cred + 1;
+
     let revoked_status_list = issuer::update_revocation_status_list(
         &gvt_cred_def,
         &gvt_rev_reg_def,
@@ -375,39 +332,41 @@ fn anoncreds_demo_works_with_revocation_for_single_issuer_single_prover() {
     .unwrap();
 
     // update rev_status_lists
-    rev_status_list.push(revoked_status_list.clone());
-
+    let rev_state = &mock.prover_wallets[GVT_PROVER_ID]
+        .rev_states.get(&RevocationRegistryDefinitionId::new_unchecked(GVT_REV_REG_DEF_ID)).unwrap().0;
     let rev_state = prover::create_or_update_revocation_state(
-        &tails_location,
+        &TF_PATH,
         &gvt_rev_reg_def,
         &revoked_status_list,
         fixtures::GVT_REV_IDX,
-        Some(&rev_state),
+        rev_state.as_ref(),
         Some(&issued_rev_status_list),
     )
     .unwrap();
 
+    mock.prover_wallets
+        .get_mut(GVT_PROVER_ID)
+        .unwrap()
+        .rev_states
+        .insert(
+            RevocationRegistryDefinitionId::new_unchecked(GVT_REV_REG_DEF_ID),
+            (Some(rev_state), Some(time_revoke_cred)),
+        );
     // Prover creates presentation
-    let presentation = fixtures::create_presentation(
-        &schemas,
-        &cred_defs,
-        &pres_request,
-        &prover_wallet,
-        Some(time_revoke_cred),
-        Some(&rev_state),
+    let presentation = mock.prover_creates_presentation(
+        GVT_PROVER_ID,
+        prover_values.clone(),
+        self_attested.clone(),
+        &reqs[0],
+        presentation_format.clone(),
     );
 
-    let valid = verifier::verify_presentation(
-        &presentation,
-        &pres_request,
-        &schemas,
-        &cred_defs,
-        Some(&rev_reg_def_map),
-        Some(rev_status_list),
-        None,
-    )
-    .expect("Error verifying presentation");
-    assert!(!valid);
+    // Verifier verifies presentation of not Revoked rev_state
+
+    let overrides = vec![None; 5];
+    let results =
+        mock.verifier_verifies_presentations_for_requests(&[presentation], &reqs, &overrides);
+    assert!(results[0].is_err());
 }
 
 #[test]
